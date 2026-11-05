@@ -1,105 +1,130 @@
 # Event Booking API
 
-A RESTful backend for managing events and reservations. Organizers can create and manage events, while signed-in users can reserve available spots, view their bookings, and cancel reservations before an event starts.
+A RESTful backend for creating events and reserving places, built with **Node.js, Express 5, and PostgreSQL**. Organizers manage events, while authenticated users can book available spots and manage their reservations. The API uses JWT authentication, role-based authorization, database transactions, and PostgreSQL row locking to prevent overbooking.
 
-Built with **Node.js, Express 5, and PostgreSQL**, with particular attention to JWT authentication, role-based authorization, database constraints, and concurrency-safe booking.
+**Deployment:** Express API on **Render**, PostgreSQL on **Neon**, source code on **GitHub**.
+
+> **Live API:** `https://event-booking-api-vf9i.onrender.com/events`
 
 ## Features
 
-- Account registration and login using an email address or username
-- Password hashing and verification with Argon2
-- Short-lived JWT access tokens (15 minutes)
-- `attendee` and `organizer` account roles
+- Public account registration (new accounts receive the `attendee` role by default)
+- Login with **username or email** and Argon2 password verification
+- JWT access tokens with a **15-minute** expiry
+- Role-based access control for organizer operations
 - Public browsing of upcoming scheduled events and individual event details
 - Organizer-owned event creation, editing, and soft cancellation
-- Booking creation with checks for duplicates, available capacity, and event status/date
-- PostgreSQL row locking to protect the last available spot during concurrent requests
-- Viewing your own bookings, including bookings for cancelled events
-- Removing your own booking before the event starts
-- Login rate limiting, Zod request validation, and integration tests
+- Reservation creation with duplicate, capacity, start-time, and status checks
+- PostgreSQL transactions and `SELECT ... FOR UPDATE` locking to prevent overbooking under concurrent requests
+- Viewing your own reservations, including those for organizer-cancelled events
+- Cancellation of your own reservation before the event starts
+- Zod request validation, login rate limiting, and integration tests
 
-## Tech stack
+## Technology stack
 
-| Layer | Technology |
+| Purpose | Technology |
 | --- | --- |
 | Runtime | Node.js (ES modules) |
-| HTTP framework | Express 5 |
-| Database | PostgreSQL, `pg` connection pool |
-| Validation | Zod |
-| Authentication | Argon2, JOSE (JWT / HS256) |
+| Web framework | Express 5 |
+| Database | PostgreSQL with `pg` connection pooling |
+| Request validation | Zod |
+| Authentication | Argon2 and JOSE (JWT, HS256) |
 | Rate limiting | `express-rate-limit` |
-| Tests | Node.js built-in test runner, Supertest |
+| Testing | Node.js built-in test runner and Supertest |
+| API hosting | Render |
+| Managed PostgreSQL | Neon |
+| Source control | Git and GitHub |
 
-## Getting started
+## Getting started locally
 
-### Prerequisites
+### Requirements
 
-- **Node.js 22+** and npm (recommended; uses Node's native `--env-file` support)
-- **PostgreSQL** running locally or accessible over the network
+- Node.js **22+** and npm
+- A local PostgreSQL server or a PostgreSQL connection URL
 
 ### 1. Install dependencies
 
 ```bash
-npm install
+npm ci
 ```
 
-### 2. Create a PostgreSQL database
+### 2. Set up the database
 
-Create a database named `event_booking` in pgAdmin, or run:
+Create a local database named `event_booking` (using pgAdmin or another PostgreSQL client):
 
 ```sql
 CREATE DATABASE event_booking;
 ```
 
-Connect to **`event_booking`** and execute the table definitions in the [Database schema](#database-schema) section. This repository does not currently include a migration runner or SQL schema file, so the tables must be created manually.
+Connect to that database, then execute the three table definitions in [Database schema](#database-schema), in order.
+
+> The project does not currently have a migration runner. Creating a database does **not** automatically create its tables.
 
 ### 3. Configure environment variables
 
-Create a `.env` file in the project root:
+Create `.env` in the project root. For **local PostgreSQL**, use:
 
 ```dotenv
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=postgres
-DB_PASSWORD=replace_with_your_postgres_password
+DB_PASSWORD=your_local_postgres_password
 DB_NAME=event_booking
 JWT_SECRET=replace_with_a_long_random_secret
 ```
 
-Use your own database credentials and a strong, randomly generated JWT secret. **Never commit `.env`, `.env.test`, or real credentials to version control.**
+Alternatively, to connect with a PostgreSQL URL, use:
 
-### 4. Start the server
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+JWT_SECRET=replace_with_a_long_random_secret
+```
 
-For development, with automatic restart on source changes:
+The application uses `DATABASE_URL` **if it is set**; otherwise, it uses the individual `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` variables. When using Neon, copy the full connection string provided by Neon, including its SSL parameters.
+
+Generate a random JWT secret with:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+**Never commit `.env`, `.env.test`, database URLs, JWT secrets, or real credentials to GitHub.**
+
+### 4. Start the API
+
+Development mode (loads `.env` and restarts on changes):
 
 ```bash
 npm run dev
 ```
 
-Or start without file watching:
+Or run once while explicitly loading `.env`:
 
 ```bash
 node --env-file=.env server.js
 ```
 
-The application listens on **`http://localhost:3000`**. The `npm start` script also runs `server.js`, but unlike `npm run dev`, it **does not load `.env` automatically**; use it only when the environment variables are already supplied by your shell or hosting environment.
+The default local address is **`http://localhost:3000`**. The server listens on `process.env.PORT` if provided, which allows deployment on Render.
+
+`npm start` runs `node server.js` but **does not automatically load `.env`**; it is intended for environments where variables are already provided, such as Render.
 
 ## API reference
 
-**Base URL:** `http://localhost:3000`
+**Local base URL:** `http://localhost:3000`  
+**Hosted base URL:** `https://YOUR-RENDER-SERVICE.onrender.com`
 
-Protected routes require:
+For endpoints requiring authentication, send:
 
 ```http
-Authorization: Bearer <accessToken>
+Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
 ### Authentication
 
 | Method | Endpoint | Access | Description |
 | --- | --- | --- | --- |
-| `POST` | `/auth/register` | Public | Register a user |
-| `POST` | `/auth/login` | Public | Log in with an email **or** username |
+| `POST` | `/auth/register` | Public | Register an attendee |
+| `POST` | `/auth/login` | Public | Log in using an email or username |
 
 **Register:**
 
@@ -112,14 +137,11 @@ Content-Type: application/json
 {
   "username": "alex",
   "email": "alex@example.com",
-  "password": "strong-password-123",
-  "role": "attendee"
+  "password": "use-a-unique-password-123"
 }
 ```
 
-`role` is currently **required** and must be either `attendee` or `organizer`. The registration route currently allows users to choose either role; see [Current limitations](#current-limitations) before deploying publicly.
-
-Registration returns `201 Created` with the username, email, and role (not the password hash).
+Registration returns `201 Created` with the account's username, email, and `role: "attendee"`. The public registration schema **does not accept a `role` field**; organizer permissions must be granted separately by an administrator.
 
 **Log in:**
 
@@ -131,86 +153,84 @@ Content-Type: application/json
 ```json
 {
   "identifier": "alex@example.com",
-  "password": "strong-password-123"
+  "password": "use-a-unique-password-123"
 }
 ```
 
-The `identifier` can be the account's **email address or username**. On success, the API returns `user`, `accessToken`, and `tokenType: "Bearer"`. Tokens expire after **15 minutes**. The login endpoint limits failed attempts to **5 per IP per 15-minute window**.
+`identifier` can be a username or email. A successful response contains user information, `accessToken`, and `tokenType: "Bearer"`. Access tokens expire after **15 minutes**. Failed login attempts are rate-limited (five per IP per 15-minute window).
 
 ### Events
 
 | Method | Endpoint | Access | Description |
 | --- | --- | --- | --- |
-| `GET` | `/events` | Public | List **upcoming, scheduled** events, ordered by start time |
-| `GET` | `/events/:id` | Public | Get an event by ID, including cancelled or past events |
-| `POST` | `/events` | Organizer | Create a scheduled event |
-| `PATCH` | `/events/:id` | Owning organizer | Edit a scheduled event |
-| `PATCH` | `/events/:id/cancel` | Owning organizer | Soft-cancel a scheduled event |
+| `GET` | `/events` | Public | List upcoming, scheduled events |
+| `GET` | `/events/:id` | Public | Get event details, including past/cancelled events |
+| `POST` | `/events` | Organizer | Create an event |
+| `PATCH` | `/events/:id` | Event owner (organizer) | Update a scheduled event |
+| `PATCH` | `/events/:id/cancel` | Event owner (organizer) | Soft-cancel a scheduled event |
 
 **Create an event:**
 
 ```http
 POST /events
-Authorization: Bearer <organizer-access-token>
+Authorization: Bearer YOUR_ORGANIZER_ACCESS_TOKEN
 Content-Type: application/json
 ```
 
 ```json
 {
   "title": "Backend Workshop",
-  "description": "An introduction to building REST APIs",
+  "description": "An introduction to REST APIs",
   "starts_at": "2030-06-15T10:00:00Z",
   "location": "Erbil",
   "capacity": 20
 }
 ```
 
-`title`, `starts_at`, `location`, and `capacity` are required. `description` is optional. `starts_at` must be an ISO 8601 datetime **in the future** with a timezone offset; `capacity` must be a positive integer. The event's `organizer_id` comes from the authenticated user, and its initial status is `scheduled`.
+Required fields: `title`, `starts_at`, `location`, `capacity`. `description` is optional. The start time must be in the future, with a valid ISO 8601 timestamp and timezone offset. Capacity must be a positive integer. The server assigns the `organizer_id` from the authenticated account and sets the new event's status to `scheduled`.
 
-The event edit route allows partial updates of title, description, start time, location, and capacity, provided the event is still scheduled and the organizer owns it. Capacity cannot be reduced below the number of existing bookings. The route locks the event record during the update to coordinate safely with booking operations.
-
-Event cancellation changes `status` to `cancelled` instead of deleting the event. Existing bookings are retained, and the event cannot be cancelled a second time through the same endpoint.
+The owning organizer can edit a scheduled event. If capacity is reduced, the API ensures the new capacity does not fall below existing reservations; it locks the event row while performing this check. Cancelling an event changes its status to `cancelled` rather than deleting the record. Existing bookings are preserved and remain visible to attendees.
 
 ### Bookings
 
 | Method | Endpoint | Access | Description |
 | --- | --- | --- | --- |
-| `POST` | `/events/:id/bookings` | Authenticated user | Reserve a spot in an upcoming scheduled event |
-| `DELETE` | `/events/:id/bookings` | Authenticated booking owner | Delete your reservation before the event starts |
-| `GET` | `/events/me/bookings` | Authenticated user | List your reservations with their event details |
+| `POST` | `/events/:id/bookings` | Authenticated | Book an upcoming scheduled event |
+| `DELETE` | `/events/:id/bookings` | Booking owner | Cancel your own booking before the event starts |
+| `GET` | `/events/me/bookings` | Authenticated | See your reservations and event details |
 
-**Book an event:**
+**Book a spot:**
 
 ```http
 POST /events/1/bookings
-Authorization: Bearer <accessToken>
+Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
-No request body is needed. On success the server responds with `201 Created` and booking data including `user_id`, `event_id`, `booked_at`, and `spots_remaining`.
+No JSON body is required. A successful booking returns `201 Created` and fields such as `user_id`, `event_id`, `booked_at`, and `spots_remaining`.
 
-A booking is rejected if the event does not exist, has started, is cancelled, is full, or the user has already booked it. Each `(user_id, event_id)` pair is unique. Booking operations lock the event row inside a database transaction to prevent competing reservations from exceeding the capacity.
+The API rejects bookings for non-existent, cancelled, past, or full events, and prevents a user from booking the same event twice. Booking creation uses a database transaction and an event-row lock, so concurrent requests cannot take more spots than capacity allows.
 
 **Cancel your booking:**
 
 ```http
 DELETE /events/1/bookings
-Authorization: Bearer <accessToken>
+Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
-A successful deletion returns `204 No Content`. Only the currently authenticated user's booking can be deleted, and only **before** the event starts. This is a **hard delete** of the booking row, not a status change.
+Returns `204 No Content` on success. Cancellation deletes the booking row and is permitted only for the authenticated booking owner before the event starts.
 
 **View your bookings:**
 
 ```http
 GET /events/me/bookings
-Authorization: Bearer <accessToken>
+Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
-Returns an array with the event ID, title, start time, location, event status, and booking timestamp. Bookings for organizer-cancelled events remain visible.
+Returns event details and booking timestamps, including reservations linked to cancelled events.
 
 ## Database schema
 
-Run these statements in your **application database**, in the order shown:
+Run these statements in the target PostgreSQL database **in this order**:
 
 ```sql
 CREATE TABLE users (
@@ -241,39 +261,97 @@ CREATE TABLE bookings (
 );
 ```
 
-**Design notes:** An event belongs to an organizer; an organizer cannot be deleted while their events exist (`ON DELETE RESTRICT`). Booking records are unique per user/event pair. Events use soft cancellation; attendee bookings are physically deleted when cancelled. New event creation explicitly supplies `status = 'scheduled'` because the column has no default.
+The `events.status` column has no database default; the event creation route explicitly inserts `scheduled`. Cancelling an event preserves its row and its bookings, while cancelling an individual booking deletes the booking row.
 
-## Running integration tests
+## Deployment — Render + Neon
 
-Tests use the real API handlers and a **separate PostgreSQL database**.
+This project has been deployed using **Render** for the Express API and **Neon** for PostgreSQL, with Render connected to the GitHub repository.
 
-1. Create a database named exactly **`event_booking_test`**.
-2. Execute the same SQL from [Database schema](#database-schema) in the **test database**.
-3. Create `.env.test` in the project root, with the same fields as `.env` but `DB_NAME=event_booking_test` and a test JWT secret.
-4. Run:
+### Neon (database)
+
+1. Create a Neon PostgreSQL project (the deployment used the **Frankfurt** region).
+2. Create the `users`, `events`, and `bookings` tables using the SQL schema above in the **correct Neon database**.
+3. Copy its PostgreSQL connection string from the Neon Console. Keep it secret.
+
+### Render (Express API)
+
+Create a Render **Web Service** connected to the GitHub repository with the following settings:
+
+| Setting | Value |
+| --- | --- |
+| Runtime / language | Node |
+| Branch | `main` |
+| Region | Frankfurt |
+| Build command | `npm ci` |
+| Start command | `npm start` |
+| Root directory | Project root (leave blank) |
+| Instance type | Free tier for learning (if available) |
+
+Configure these environment variables in Render (not in GitHub):
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | Complete Neon PostgreSQL connection string, including SSL settings |
+| `JWT_SECRET` | Long, randomly generated secret; **do not reuse a placeholder** |
+| `NODE_ENV` | `production` |
+
+Render supplies `PORT` automatically. The server uses that port or falls back to `3000` locally. Render provides an HTTPS `*.onrender.com` URL; a custom domain is optional.
+
+Deploy from GitHub, then verify:
+
+```http
+GET https://YOUR-RENDER-SERVICE.onrender.com/events
+```
+
+With no scheduled upcoming events, the response is `[]`. Registration and login can be tested with Postman, followed by authenticated event and booking requests.
+
+**Important:** The Neon production database is separate from your local database and test database. Don't run automated integration tests against production. Free web services may take longer to respond after being inactive.
+
+### Giving an account organizer access
+
+Public registration creates attendees only. To enable an **account you control** to create events, an authorized administrator can update its role using the Neon SQL Editor:
+
+```sql
+UPDATE users
+SET role = 'organizer'
+WHERE email = 'your-organizer@example.com'
+RETURNING id, username, email, role;
+```
+
+Use a known account and confirm the returned row. **Do not add a public endpoint that lets users grant themselves organizer privileges.**
+
+## Integration tests
+
+Automated integration tests use Node's built-in test runner, Supertest, and a separate PostgreSQL database.
+
+1. Create a database named exactly `event_booking_test`.
+2. Create the same three tables in that database using the schema above.
+3. Create `.env.test` with `DB_NAME=event_booking_test`, the other `DB_*` connection fields, and a **test** `JWT_SECRET`.
+4. Ensure `DATABASE_URL` is **not set** in the environment when running the local test suite (it takes precedence over `DB_*`).
+5. Run:
 
 ```bash
 npm test
 ```
 
-The test scripts explicitly verify they are connected to `event_booking_test`, create temporary fixtures, and remove them afterward. The test suite currently contains **7 integration tests** covering public event listing, authentication requirements, organizer login and event creation, booking creation and duplicates, cancellation, and competing requests for a single available spot.
+The tests assert that they are using `event_booking_test`. The **seven integration tests** cover public event listing, authentication enforcement, organizer login and event creation, booking creation, duplicate prevention, cancellation, and concurrent booking attempts for one remaining spot.
 
-**Do not point `.env.test` at your development or production database.**
+**Never run integration tests against your Neon production database.**
 
 ## Project structure
 
 ```text
 .
-├── app.js                    # Express app, middleware, mounted routes
-├── server.js                 # HTTP listener (port 3000)
+├── app.js
+├── server.js
 ├── config/
-│   └── db.js                 # PostgreSQL connection pool
+│   └── db.js
 ├── middleware/
-│   ├── authenticateToken.js  # JWT verification + user lookup
-│   ├── authorizeRoles.js     # Organizer role checks
-│   ├── errorHandler.js       # Generic error responses
-│   ├── rateLimiters.js       # Login rate limiting
-│   └── validateBody.js       # Zod request validation
+│   ├── authenticateToken.js
+│   ├── authorizeRoles.js
+│   ├── errorHandler.js
+│   ├── rateLimiters.js
+│   └── validateBody.js
 ├── routes/
 │   ├── authRoutes.js
 │   ├── eventRoutes.js
@@ -286,31 +364,36 @@ The test scripts explicitly verify they are connected to `event_booking_test`, c
 │   ├── bookings.integration.test.js
 │   └── helpers/
 │       └── fixtures.js
-└── package.json
+├── package.json
+├── package-lock.json
+└── README.md
 ```
 
-## HTTP status codes
-
-The API uses standard statuses, including:
+## API status codes
 
 | Status | Meaning |
 | --- | --- |
 | `200` | Successful request |
 | `201` | Resource created |
-| `204` | Booking deleted successfully (no response body) |
+| `204` | Booking deleted (no response body) |
 | `400` | Invalid request data |
-| `401` | Missing/invalid token or invalid login credentials |
-| `403` | Insufficient permissions |
-| `404` | Requested event or booking not found |
-| `409` | Duplicate booking, no available spots, or other business-rule conflict |
+| `401` | Not authenticated or invalid login |
+| `403` | Insufficient role permissions |
+| `404` | Event or booking not found |
+| `409` | Business-rule conflict (for example duplicate/full booking) |
 | `429` | Login rate limit exceeded |
 | `500` | Unexpected server error |
 
-## Current limitations
+## Current scope and limitations
 
-This project is a learning-focused backend MVP, not a production-hardened service.
+This is a deployed **learning-project MVP**, not a fully hardened commercial booking platform.
 
-- **Registration authorization:** Public registration currently accepts a requested role, including `organizer`. A public deployment should restrict who can grant organizer privileges.
-- **Database setup:** No migration or seed scripts are included; schema creation is manual.
-- **Authentication:** Access tokens expire after 15 minutes; there is no refresh-token flow.
-- **Scope:** No frontend, payments, email notifications, or waitlists are implemented.
+- Database tables are created manually; there are no migration/seed scripts yet.
+- JWT access tokens expire after 15 minutes; refresh tokens and password-reset workflows are not implemented.
+- Organizer access is assigned manually; there is no admin dashboard.
+- No frontend, payment processing, email notifications, or waitlists.
+- Additional operational hardening, monitoring, and security reviews would be required before unrestricted public/commercial use.
+
+## License
+
+`package.json` declares the ISC license. If you want to formally publish the project under that license, add a matching `LICENSE` file.
