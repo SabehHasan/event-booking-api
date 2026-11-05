@@ -4,6 +4,7 @@ import { authenticateToken } from "../middleware/authenticateToken.js";
 import { createEventSchema, updateEventSchema } from "../schemas/eventSchemas.js";
 import { validateBody } from "../middleware/validateBody.js";
 import { authorizeRoles } from "../middleware/authorizeRoles.js";
+import * as z from 'zod'
 
 const router = express.Router()
 
