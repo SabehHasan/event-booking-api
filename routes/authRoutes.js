@@ -12,13 +12,13 @@ const router = express.Router()
 
 router.post('/register', validateBody(registrationSchema), async (req, res) => {
     
-    const { username, email, password, role } = req.body
+    const { username, email, password } = req.body
 
     try {
         const hashedPassword = await argon2.hash(password)
 
         const result = await pool.query(
-            'INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING username, email, role', [username, email, hashedPassword, role]
+            'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING username, email, role', [username, email, hashedPassword]
         )
 
         return res.status(201).json(result.rows[0])
